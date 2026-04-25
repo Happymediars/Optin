@@ -8,13 +8,25 @@ function deviceMatches(device: string, userAgent: string) {
   return true;
 }
 
+function withCors(res: NextResponse) {
+  res.headers.set("Access-Control-Allow-Origin", "*");
+  res.headers.set("Access-Control-Allow-Methods", "GET,OPTIONS");
+  res.headers.set("Access-Control-Allow-Headers", "content-type");
+  return res;
+}
+
+export async function OPTIONS() {
+  return withCors(new NextResponse(null, { status: 204 }));
+}
+
 export async function GET(req: Request) {
   const url = new URL(req.url);
   const siteId = url.searchParams.get("siteId");
   const pageUrl = url.searchParams.get("url") || "";
   const userAgent = req.headers.get("user-agent") || "";
 
-  if (!siteId) return NextResponse.json({ campaigns: [] });
+  if (!siteId) return withCors(NextResponse.json({ campaigns: [] }));
+
   const supabase = createAdminClient();
   const { data } = await supabase
     .from("campaigns")
@@ -28,5 +40,5 @@ export async function GET(req: Request) {
     return deviceMatches(rules.device ?? "all", userAgent);
   });
 
-  return NextResponse.json({ campaigns });
+  return withCors(NextResponse.json({ campaigns }));
 }

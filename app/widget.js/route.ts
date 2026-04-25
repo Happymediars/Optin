@@ -1,67 +1,160 @@
 import { NextResponse } from "next/server";
 
-const script = `(() => {
+const script = String.raw`(() => {
   const scriptTag = document.currentScript;
   if (!scriptTag) return;
-  const siteId = scriptTag.getAttribute("data-site-id");
+
+  const siteId = scriptTag.getAttribute('data-site-id');
   if (!siteId) return;
 
-  const key = (campaignId) => `optin_seen_${campaignId}`;
+  const scriptSrc = scriptTag.getAttribute('src') || '';
+  const apiOrigin = scriptSrc.startsWith('http') ? new URL(scriptSrc).origin : window.location.origin;
+  const seenKey = (campaignId) => 'optin_seen_' + campaignId;
 
   const sendEvent = async (payload) => {
-    await fetch('/api/widget/event', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(payload)
-    });
+    try {
+      await fetch(apiOrigin + '/api/widget/event', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(payload),
+        keepalive: true
+      });
+    } catch (_) {}
   };
 
-  const renderCampaign = (campaign) => {
+  const createNode = (tag, text, style) => {
+    const el = document.createElement(tag);
+    if (text) el.textContent = text;
+    if (style) Object.assign(el.style, style);
+    return el;
+  };
+
+  const showCampaign = (campaign) => {
     const rules = campaign.display_rules || {};
     const delay = Number(rules.delaySeconds || 0) * 1000;
     const scrollPercent = Number(rules.scrollPercent || 0);
     const useExitIntent = Boolean(rules.exitIntent);
     const frequencyHours = Number(rules.frequencyHours || 24);
 
-    const alreadyShown = localStorage.getItem(key(campaign.id));
-    if (alreadyShown && Date.now() - Number(alreadyShown) < frequencyHours * 3600000) return;
+    const previousShownAt = localStorage.getItem(seenKey(campaign.id));
+    if (previousShownAt && Date.now() - Number(previousShownAt) < frequencyHours * 3600000) return;
 
     let shown = false;
+
     const show = () => {
       if (shown) return;
       shown = true;
-      localStorage.setItem(key(campaign.id), String(Date.now()));
+      localStorage.setItem(seenKey(campaign.id), String(Date.now()));
 
-      const wrapper = document.createElement('div');
-      wrapper.innerHTML = `
-        <div style="position:fixed;inset:0;z-index:999999;background:rgba(0,0,0,.35);display:flex;align-items:center;justify-content:center;padding:16px;">
-          <div style="background:#fff;max-width:420px;width:100%;border-radius:12px;padding:20px;font-family:system-ui;">
-            <h3 style="margin:0 0 6px;font-size:24px;">${campaign.headline}</h3>
-            <p style="margin:0 0 12px;color:#475569;">${campaign.subheadline}</p>
-            <form id="optin-form">
-              <input type="email" required placeholder="you@company.com" style="width:100%;height:40px;padding:0 12px;border:1px solid #cbd5e1;border-radius:8px;" />
-              <button style="margin-top:10px;width:100%;height:40px;border:none;border-radius:8px;background:#2563eb;color:white;cursor:pointer;">${campaign.button_text}</button>
-            </form>
-            <button id="optin-close" style="margin-top:8px;background:none;border:none;color:#64748b;cursor:pointer;">Close</button>
-          </div>
-        </div>
-      `;
-      document.body.appendChild(wrapper);
-      sendEvent({ type: 'impression', siteId, campaignId: campaign.id, path: location.pathname });
+      const overlay = createNode('div', '', {
+        position: 'fixed',
+        inset: '0',
+        zIndex: '999999',
+        background: 'rgba(0,0,0,.35)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: '16px'
+      });
 
-      wrapper.querySelector('#optin-close')?.addEventListener('click', () => wrapper.remove());
-      wrapper.querySelector('#optin-form')?.addEventListener('submit', async (e) => {
-        e.preventDefault();
-        const email = e.target.querySelector('input').value;
-        await sendEvent({ type: 'lead', siteId, campaignId: campaign.id, email, path: location.pathname });
-        e.target.outerHTML = `<div style="padding:8px 0;color:#16a34a;">${campaign.success_message}</div>`;
+      const card = createNode('div', '', {
+        background: '#fff',
+        maxWidth: '420px',
+        width: '100%',
+        borderRadius: '12px',
+        padding: '20px',
+        fontFamily: 'system-ui'
+      });
+
+      const title = createNode('h3', campaign.headline || 'Join our newsletter', {
+        margin: '0 0 6px',
+        fontSize: '24px'
+      });
+      const subtitle = createNode('p', campaign.subheadline || '', {
+        margin: '0 0 12px',
+        color: '#475569'
+      });
+      const form = createNode('form');
+      const input = createNode('input');
+      input.setAttribute('type', 'email');
+      input.setAttribute('required', 'true');
+      input.setAttribute('placeholder', 'you@company.com');
+      Object.assign(input.style, {
+        width: '100%',
+        height: '40px',
+        padding: '0 12px',
+        border: '1px solid #cbd5e1',
+        borderRadius: '8px'
+      });
+      const button = createNode('button', campaign.button_text || 'Subscribe', {
+        marginTop: '10px',
+        width: '100%',
+        height: '40px',
+        border: 'none',
+        borderRadius: '8px',
+        background: '#2563eb',
+        color: 'white',
+        cursor: 'pointer'
+      });
+      button.setAttribute('type', 'submit');
+
+      const close = createNode('button', 'Close', {
+        marginTop: '8px',
+        background: 'none',
+        border: 'none',
+        color: '#64748b',
+        cursor: 'pointer'
+      });
+      close.setAttribute('type', 'button');
+
+      form.appendChild(input);
+      form.appendChild(button);
+      card.appendChild(title);
+      card.appendChild(subtitle);
+      card.appendChild(form);
+      card.appendChild(close);
+      overlay.appendChild(card);
+      document.body.appendChild(overlay);
+
+      sendEvent({
+        type: 'impression',
+        siteId,
+        campaignId: campaign.id,
+        path: window.location.pathname,
+        pageUrl: window.location.href
+      });
+
+      close.addEventListener('click', () => overlay.remove());
+
+      form.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        const email = input.value;
+        if (!email) return;
+
+        await sendEvent({
+          type: 'lead',
+          siteId,
+          campaignId: campaign.id,
+          email,
+          path: window.location.pathname,
+          pageUrl: window.location.href
+        });
+
+        const success = createNode('div', campaign.success_message || 'Thanks for subscribing!', {
+          padding: '8px 0',
+          color: '#16a34a'
+        });
+        form.replaceWith(success);
       });
     };
 
     if (delay > 0) setTimeout(show, delay);
+
     if (scrollPercent > 0) {
       const onScroll = () => {
-        const scrolled = (window.scrollY / (document.body.scrollHeight - window.innerHeight)) * 100;
+        const maxScrollable = document.body.scrollHeight - window.innerHeight;
+        if (maxScrollable <= 0) return;
+        const scrolled = (window.scrollY / maxScrollable) * 100;
         if (scrolled >= scrollPercent) {
           show();
           window.removeEventListener('scroll', onScroll);
@@ -69,6 +162,7 @@ const script = `(() => {
       };
       window.addEventListener('scroll', onScroll);
     }
+
     if (useExitIntent) {
       const onLeave = (event) => {
         if (event.clientY <= 0) {
@@ -78,16 +172,26 @@ const script = `(() => {
       };
       document.addEventListener('mouseout', onLeave);
     }
+
     if (delay === 0 && scrollPercent === 0 && !useExitIntent) show();
   };
 
-  fetch(`/api/widget/config?siteId=${siteId}&url=${encodeURIComponent(location.pathname)}`)
+  const query = new URLSearchParams({
+    siteId,
+    url: window.location.href
+  });
+
+  fetch(apiOrigin + '/api/widget/config?' + query.toString())
     .then((res) => res.json())
-    .then((data) => (data.campaigns || []).forEach(renderCampaign));
+    .then((data) => (data.campaigns || []).forEach(showCampaign))
+    .catch(() => {});
 })();`;
 
 export async function GET() {
   return new NextResponse(script, {
-    headers: { "Content-Type": "application/javascript; charset=utf-8" }
+    headers: {
+      "Content-Type": "application/javascript; charset=utf-8",
+      "Cache-Control": "public, max-age=60"
+    }
   });
 }
